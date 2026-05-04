@@ -5,7 +5,9 @@ from fastapi import FastAPI, UploadFile, File, Query
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 
-from engine import IrLoader, Resampler, ConvolutionEngine
+from engine.ir_loader import IrLoader
+from engine.resampler import Resampler
+from engine.convolution_engine import ConvolutionEngine
 
 app = FastAPI(title="OpenMind Audio API")
 
