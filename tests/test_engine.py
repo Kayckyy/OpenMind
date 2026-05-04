@@ -1,6 +1,8 @@
 import numpy as np
 import pytest
-from engine import IrLoader, Resampler, ConvolutionEngine
+from engine.ir_loader import IrLoader
+from engine.resampler import Resampler
+from engine.convolution_engine import ConvolutionEngine
 
 
 # ── Resampler ──────────────────────────────────────────────
