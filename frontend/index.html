@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OpenMind</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: sans-serif; background: #111; color: #eee; padding: 24px; }
+    h1 { margin-bottom: 24px; font-size: 1.4rem; }
+    .group { margin-bottom: 16px; }
+    label { display: block; margin-bottom: 4px; font-size: 0.85rem; color: #aaa; }
+    input[type=range] { width: 100%; }
+    input[type=file] { color: #eee; }
+    button {
+      margin-top: 16px; padding: 12px 24px;
+      background: #7c3aed; color: white;
+      border: none; border-radius: 8px;
+      font-size: 1rem; cursor: pointer; width: 100%;
+    }
+    button:disabled { background: #444; cursor: not-allowed; }
+    #status { margin-top: 12px; font-size: 0.85rem; color: #aaa; }
+    audio { margin-top: 16px; width: 100%; }
+  </style>
+</head>
+<body>
+  <h1>OpenMind</h1>
+
+  <div class="group">
+    <label>Audio file</label>
+    <input type="file" id="file" accept=".wav,.mp3,.flac">
+  </div>
+
+  <div class="group">
+    <label>Azimuth L: <span id="az_l_val">90°</span></label>
+    <input type="range" id="az_l" min="0" max="360" value="90"
+      oninput="document.getElementById('az_l_val').textContent = this.value + '°'">
+  </div>
+
+  <div class="group">
+    <label>Azimuth R: <span id="az_r_val">270°</span></label>
+    <input type="range" id="az_r" min="0" max="360" value="270"
+      oninput="document.getElementById('az_r_val').textContent = this.value + '°'">
+  </div>
+
+  <div class="group">
+    <label>Elevation L: <span id="el_l_val">0°</span></label>
+    <input type="range" id="el_l" min="-90" max="90" value="0"
+      oninput="document.getElementById('el_l_val').textContent = this.value + '°'">
+  </div>
+
+  <div class="group">
+    <label>Elevation R: <span id="el_r_val">0°</span></label>
+    <input type="range" id="el_r" min="-90" max="90" value="0"
+      oninput="document.getElementById('el_r_val').textContent = this.value + '°'">
+  </div>
+
+  <button id="btn" onclick="process()">Process & Play</button>
+  <div id="status"></div>
+  <audio id="player" controls></audio>
+
+  <script>
+    async function process() {
+      const file = document.getElementById('file').files[0];
+      if (!file) { alert('Select a file first'); return; }
+
+      const btn = document.getElementById('btn');
+      const status = document.getElementById('status');
+      btn.disabled = true;
+      status.textContent = 'Processing...';
+
+      const form = new FormData();
+      form.append('file', file);
+
+      const az_l = document.getElementById('az_l').value;
+      const az_r = document.getElementById('az_r').value;
+      const el_l = document.getElementById('el_l').value;
+      const el_r = document.getElementById('el_r').value;
+
+      try {
+        const res = await fetch(
+          `http://localhost:8000/process?az_l=${az_l}&el_l=${el_l}&az_r=${az_r}&el_r=${el_r}`,
+          { method: 'POST', body: form }
+        );
+
+        if (!res.ok) throw new Error('API error');
+
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const player = document.getElementById('player');
+        player.src = url;
+        player.play();
+        status.textContent = 'Done!';
+      } catch (e) {
+        status.textContent = 'Error: ' + e.message;
+      } finally {
+        btn.disabled = false;
+      }
+    }
+  </script>
+</body>
+</html>
