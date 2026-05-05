@@ -1,7 +1,8 @@
 import io
 import numpy as np
 import soundfile as sf
-from fastapi import FastAPI, UploadFile, File, Query
+from fastapi import FastAPI, UploadFile, File, Query, WebSocket, WebSocketDisconnect
+import struct
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -83,5 +84,51 @@ async def process_audio(
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+@app.websocket("/stream")
+async def stream_audio(websocket: WebSocket):
+    await websocket.accept()
+
+    try:
+        # Recebe parâmetros iniciais como JSON
+        params = await websocket.receive_json()
+        az_l = float(params.get("az_l", 90.0))
+        el_l = float(params.get("el_l", 0.0))
+        az_r = float(params.get("az_r", 270.0))
+        el_r = float(params.get("el_r", 0.0))
+
+        engine = load_engine(az_l, el_l, az_r, el_r)
+        engine.reset()
+
+        # Processa chunks
+        while True:
+            data = await websocket.receive_bytes()
+
+            # Sinal de fim
+            if data == b"END":
+                break
+
+            # Converte bytes pra float32
+            samples = np.frombuffer(data, dtype=np.float32)
+
+            # Separa L e R (intercalado: L0, R0, L1, R1...)
+            if len(samples) % 2 == 0:
+                input_l = samples[0::2]
+                input_r = samples[1::2]
+            else:
+                input_l = input_r = samples
+
+            # Processa
+            out_l, out_r = engine.process(input_l, input_r)
+
+            # Intercala L e R de volta
+            output = np.empty(len(out_l) + len(out_r), dtype=np.float32)
+            output[0::2] = out_l
+            output[1::2] = out_r
+
+            await websocket.send_bytes(output.tobytes())
+
+    except WebSocketDisconnect:
+        pass
 
 app.mount("/", StaticFiles(directory="frontend", html=True), name="frontend")
