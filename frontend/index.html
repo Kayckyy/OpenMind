@@ -7,73 +7,179 @@
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: sans-serif; background: #111; color: #eee; padding: 24px; }
-    h1 { margin-bottom: 24px; font-size: 1.4rem; }
-    .group { margin-bottom: 16px; }
-    label { display: block; margin-bottom: 4px; font-size: 0.85rem; color: #aaa; }
-    input[type=range] { width: 100%; }
-    input[type=file] { color: #eee; }
-    .buttons { display: flex; gap: 8px; margin-top: 16px; }
-    button {
-      padding: 12px 24px; border: none; border-radius: 8px;
-      font-size: 1rem; cursor: pointer; flex: 1;
+    h1 { margin-bottom: 8px; font-size: 1.4rem; }
+    .subtitle { color: #666; font-size: 0.8rem; margin-bottom: 24px; }
+    .section { margin-bottom: 20px; }
+    .section-title { font-size: 0.75rem; color: #555; text-transform: uppercase;
+                     letter-spacing: 1px; margin-bottom: 8px; }
+    .search-row { display: flex; gap: 8px; }
+    .search-row input {
+      flex: 1; padding: 10px 12px; background: #1e1e1e;
+      border: 1px solid #333; border-radius: 8px; color: #eee; font-size: 0.95rem;
     }
-    #btnPlay { background: #7c3aed; color: white; }
-    #btnStop { background: #444; color: white; }
-    button:disabled { background: #333; color: #666; cursor: not-allowed; }
-    #status { margin-top: 12px; font-size: 0.85rem; color: #aaa; }
+    .search-row button {
+      padding: 10px 16px; background: #7c3aed; color: white;
+      border: none; border-radius: 8px; cursor: pointer; font-size: 0.95rem;
+    }
+    .divider { text-align: center; color: #444; margin: 12px 0; font-size: 0.85rem; }
+    input[type=file] { color: #aaa; font-size: 0.9rem; }
+    .group { margin-bottom: 12px; }
+    label { display: block; margin-bottom: 4px; font-size: 0.82rem; color: #888; }
+    input[type=range] { width: 100%; accent-color: #7c3aed; }
+    .buttons { display: flex; gap: 8px; margin-top: 16px; }
+    button.primary {
+      flex: 1; padding: 12px; background: #7c3aed; color: white;
+      border: none; border-radius: 8px; font-size: 1rem; cursor: pointer;
+    }
+    button.secondary {
+      flex: 1; padding: 12px; background: #222; color: #aaa;
+      border: 1px solid #333; border-radius: 8px; font-size: 1rem; cursor: pointer;
+    }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+    #status {
+      margin-top: 12px; font-size: 0.85rem; color: #7c3aed;
+      min-height: 20px; text-align: center;
+    }
   </style>
 </head>
 <body>
   <h1>OpenMind</h1>
+  <p class="subtitle">Open spatial audio — everywhere</p>
 
-  <div class="group">
-    <label>Audio file</label>
+  <div class="section">
+    <div class="section-title">YouTube</div>
+    <div class="search-row">
+      <input type="text" id="ytQuery" placeholder="Search or paste YouTube URL...">
+      <button onclick="startYoutube()">▶</button>
+    </div>
+  </div>
+
+  <div class="divider">or</div>
+
+  <div class="section">
+    <div class="section-title">Local file</div>
     <input type="file" id="file" accept=".wav,.mp3,.flac">
+    <div class="buttons">
+      <button class="primary" id="btnPlay" onclick="startStream()">▶ Play</button>
+      <button class="secondary" id="btnStop" onclick="stopStream()" disabled>■ Stop</button>
+    </div>
   </div>
 
-  <div class="group">
-    <label>Azimuth L: <span id="az_l_val">90°</span></label>
-    <input type="range" id="az_l" min="0" max="360" value="90"
-      oninput="document.getElementById('az_l_val').textContent = this.value + '°'">
+  <div class="section">
+    <div class="section-title">Spatial controls</div>
+    <div class="group">
+      <label>Azimuth L: <span id="az_l_val">90°</span></label>
+      <input type="range" id="az_l" min="0" max="360" value="90"
+        oninput="document.getElementById('az_l_val').textContent = this.value + '°'">
+    </div>
+    <div class="group">
+      <label>Azimuth R: <span id="az_r_val">270°</span></label>
+      <input type="range" id="az_r" min="0" max="360" value="270"
+        oninput="document.getElementById('az_r_val').textContent = this.value + '°'">
+    </div>
+    <div class="group">
+      <label>Elevation L: <span id="el_l_val">0°</span></label>
+      <input type="range" id="el_l" min="-90" max="90" value="0"
+        oninput="document.getElementById('el_l_val').textContent = this.value + '°'">
+    </div>
+    <div class="group">
+      <label>Elevation R: <span id="el_r_val">0°</span></label>
+      <input type="range" id="el_r" min="-90" max="90" value="0"
+        oninput="document.getElementById('el_r_val').textContent = this.value + '°'">
+    </div>
   </div>
 
-  <div class="group">
-    <label>Azimuth R: <span id="az_r_val">270°</span></label>
-    <input type="range" id="az_r" min="0" max="360" value="270"
-      oninput="document.getElementById('az_r_val').textContent = this.value + '°'">
-  </div>
-
-  <div class="group">
-    <label>Elevation L: <span id="el_l_val">0°</span></label>
-    <input type="range" id="el_l" min="-90" max="90" value="0"
-      oninput="document.getElementById('el_l_val').textContent = this.value + '°'">
-  </div>
-
-  <div class="group">
-    <label>Elevation R: <span id="el_r_val">0°</span></label>
-    <input type="range" id="el_r" min="-90" max="90" value="0"
-      oninput="document.getElementById('el_r_val').textContent = this.value + '°'">
-  </div>
-
-  <div class="buttons">
-    <button id="btnPlay" onclick="startStream()">▶ Play</button>
-    <button id="btnStop" onclick="stopStream()" disabled>■ Stop</button>
-  </div>
   <div id="status"></div>
 
   <script>
     let ws = null;
     let audioCtx = null;
     let nextTime = 0;
-    let reader = null;
     let stopped = false;
-
-    const CHUNK_SIZE = 4096; // samples por chunk
     const SR = 44100;
+    const CHUNK_SIZE = 4096;
 
     function setStatus(msg) {
       document.getElementById('status').textContent = msg;
     }
+
+    function getParams() {
+      return {
+        az_l: document.getElementById('az_l').value,
+        el_l: document.getElementById('el_l').value,
+        az_r: document.getElementById('az_r').value,
+        el_r: document.getElementById('el_r').value,
+      };
+    }
+
+    function initAudio() {
+      audioCtx = new AudioContext({ sampleRate: SR });
+      nextTime = audioCtx.currentTime + 0.2;
+    }
+
+    function handleChunk(event) {
+      if (typeof event.data === 'string') {
+        const msg = JSON.parse(event.data);
+        setStatus(msg.status === 'downloading' ? 'Downloading...'
+                : msg.status === 'processing'  ? 'Processing...'
+                : msg.status === 'done'         ? 'Done!'
+                : msg.status);
+        return;
+      }
+
+      const samples = new Float32Array(event.data);
+      const frameCount = samples.length / 2;
+      const buffer = audioCtx.createBuffer(2, frameCount, SR);
+      const outL = buffer.getChannelData(0);
+      const outR = buffer.getChannelData(1);
+
+      for (let i = 0; i < frameCount; i++) {
+        outL[i] = samples[i * 2];
+        outR[i] = samples[i * 2 + 1];
+      }
+
+      const source = audioCtx.createBufferSource();
+      source.buffer = buffer;
+      source.connect(audioCtx.destination);
+
+      const when = Math.max(nextTime, audioCtx.currentTime + 0.05);
+      source.start(when);
+      nextTime = when + buffer.duration;
+    }
+
+    function onClose() {
+      setStatus('');
+      document.getElementById('btnPlay').disabled = false;
+      document.getElementById('btnStop').disabled = true;
+    }
+
+    // ── YouTube ──────────────────────────────────────────
+
+    async function startYoutube() {
+      const query = document.getElementById('ytQuery').value.trim();
+      if (!query) { alert('Enter a search term or YouTube URL'); return; }
+
+      stopStream();
+      initAudio();
+      stopped = false;
+
+      const host = window.location.hostname;
+      ws = new WebSocket(`ws://${host}:8000/stream/youtube`);
+      ws.binaryType = 'arraybuffer';
+
+      ws.onopen = () => {
+        setStatus('Connecting...');
+        ws.send(JSON.stringify({ query, ...getParams() }));
+      };
+
+      ws.onmessage = handleChunk;
+      ws.onclose = onClose;
+      ws.onerror = () => setStatus('Connection error.');
+
+      document.getElementById('btnStop').disabled = false;
+    }
+
+    // ── Local file ───────────────────────────────────────
 
     async function startStream() {
       const file = document.getElementById('file').files[0];
@@ -82,10 +188,7 @@
       stopped = false;
       document.getElementById('btnPlay').disabled = true;
       document.getElementById('btnStop').disabled = false;
-      setStatus('Connecting...');
-
-      audioCtx = new AudioContext({ sampleRate: SR });
-      nextTime = audioCtx.currentTime + 0.1;
+      initAudio();
 
       const host = window.location.hostname;
       ws = new WebSocket(`ws://${host}:8000/stream`);
@@ -93,33 +196,22 @@
 
       ws.onopen = async () => {
         setStatus('Streaming...');
+        ws.send(JSON.stringify(getParams()));
 
-        // Envia parâmetros
-        ws.send(JSON.stringify({
-          az_l: document.getElementById('az_l').value,
-          el_l: document.getElementById('el_l').value,
-          az_r: document.getElementById('az_r').value,
-          el_r: document.getElementById('el_r').value,
-        }));
-
-        // Decodifica o arquivo
         const arrayBuffer = await file.arrayBuffer();
         const decoded = await audioCtx.decodeAudioData(arrayBuffer);
 
-        // Pega L e R
         const chL = decoded.getChannelData(0);
         const chR = decoded.numberOfChannels > 1
           ? decoded.getChannelData(1)
           : decoded.getChannelData(0);
 
-        // Manda chunk a chunk
         for (let i = 0; i < chL.length; i += CHUNK_SIZE) {
           if (stopped) break;
 
           const blockL = chL.slice(i, i + CHUNK_SIZE);
           const blockR = chR.slice(i, i + CHUNK_SIZE);
 
-          // Intercala L e R
           const interleaved = new Float32Array(blockL.length + blockR.length);
           for (let j = 0; j < blockL.length; j++) {
             interleaved[j * 2] = blockL[j];
@@ -127,55 +219,24 @@
           }
 
           ws.send(interleaved.buffer);
-
-          // Aguarda um pouco pra não saturar
           await new Promise(r => setTimeout(r, 10));
         }
 
         if (!stopped) ws.send(new TextEncoder().encode('END'));
       };
 
-      ws.onmessage = (event) => {
-        const samples = new Float32Array(event.data);
-        const frameCount = samples.length / 2;
-
-        const buffer = audioCtx.createBuffer(2, frameCount, SR);
-        const outL = buffer.getChannelData(0);
-        const outR = buffer.getChannelData(1);
-
-        for (let i = 0; i < frameCount; i++) {
-          outL[i] = samples[i * 2];
-          outR[i] = samples[i * 2 + 1];
-        }
-
-        const source = audioCtx.createBufferSource();
-        source.buffer = buffer;
-        source.connect(audioCtx.destination);
-
-        const when = Math.max(nextTime, audioCtx.currentTime + 0.05);
-        source.start(when);
-        nextTime = when + buffer.duration;
-      };
-
-      ws.onclose = () => {
-        setStatus('Done.');
-        document.getElementById('btnPlay').disabled = false;
-        document.getElementById('btnStop').disabled = true;
-      };
-
-      ws.onerror = (e) => {
-        setStatus('WebSocket error.');
-        console.error(e);
-      };
+      ws.onmessage = handleChunk;
+      ws.onclose = onClose;
+      ws.onerror = () => setStatus('Connection error.');
     }
 
     function stopStream() {
       stopped = true;
-      if (ws) ws.close();
-      if (audioCtx) audioCtx.close();
+      if (ws) { ws.close(); ws = null; }
+      if (audioCtx) { audioCtx.close(); audioCtx = null; }
       document.getElementById('btnPlay').disabled = false;
       document.getElementById('btnStop').disabled = true;
-      setStatus('Stopped.');
+      setStatus('');
     }
   </script>
 </body>
