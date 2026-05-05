@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from engine.ir_loader import IrLoader
 from engine.resampler import Resampler
 from engine.convolution_engine import ConvolutionEngine
+from fastapi.staticfiles import StaticFiles
 
 app = FastAPI(title="OpenMind Audio API")
 
@@ -82,3 +83,5 @@ async def process_audio(
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+app.mount("/", StaticFiles(directory="frontend", html=True), name="frontend")
