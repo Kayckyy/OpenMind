@@ -2,13 +2,20 @@ import numpy as np
 
 
 class Upmix:
+    """
+    Filosofia: o estéreo original é a âncora da imagem.
+    Os canais espaciais (side, rear) são extraídos e retornados separadamente
+    para serem misturados de forma aditiva pelo ConvolutionEngine.
+
+    Não há ganho aplicado aqui sobre o sinal original — só extração.
+    """
+
     def __init__(self, block_size: int = 4096, smooth: float = 0.95):
         self.block_size = block_size
         self.smooth = smooth
 
-        self._front_gain = 0.5
-        self._rear_gain  = 0.0
-        self._side_gain  = 0.5
+        self._rear_gain = 0.0
+        self._side_gain = 0.5
 
         # Buffer de delay para decorrelação do side_r (7 samples)
         self._delay_buf = np.zeros(7, dtype=np.float32)
@@ -20,11 +27,7 @@ class Upmix:
         return float(np.sum(l * r) / norm)
 
     def _decorrelate(self, signal: np.ndarray) -> np.ndarray:
-        """
-        Decorrelação por delay fracionado curto (7 samples ≈ 0.15ms @ 44100Hz).
-        Evita inversão de fase sem introduzir coloração perceptível.
-        Mantém buffer entre blocos para continuidade.
-        """
+        """Delay de 7 samples com buffer entre blocos — sem inversão de fase."""
         delay = len(self._delay_buf)
         padded = np.concatenate([self._delay_buf, signal])
         out = padded[:len(signal)].copy()
@@ -36,30 +39,29 @@ class Upmix:
 
         mid    = (input_l + input_r) * 0.5
         side_l = (input_l - input_r) * 0.5
-        side_r = self._decorrelate((input_r - input_l) * 0.5)  # decorrelado, não invertido
+        side_r = self._decorrelate((input_r - input_l) * 0.5)
 
         corr = self._correlation(input_l, input_r)
 
-        target_front = max(0.0, corr)
-        target_rear  = (1.0 - abs(corr)) * 0.4
-        target_side  = min((1.0 - abs(corr)) * 1.2, 1.0)  # clamp para evitar ganho > 1
+        # Quanto mais descorrelacionado, mais espaço nos sides e rear
+        diffuse = 1.0 - abs(corr)
 
-        self._front_gain = self.smooth * self._front_gain + (1 - self.smooth) * target_front
-        self._rear_gain  = self.smooth * self._rear_gain  + (1 - self.smooth) * target_rear
-        self._side_gain  = self.smooth * self._side_gain  + (1 - self.smooth) * target_side
+        target_rear = diffuse * 0.5
+        target_side = min(diffuse * 1.0, 0.85)  # nunca passa de 0.85
 
-        fg = self._front_gain
-        sg = self._side_gain
+        self._rear_gain = self.smooth * self._rear_gain + (1 - self.smooth) * target_rear
+        self._side_gain = self.smooth * self._side_gain + (1 - self.smooth) * target_side
 
         return {
-            # Front preserva parte da diferença L/R original — evita imagem frontal flat
-            'front_l': (mid + side_l * 0.3) * fg,
-            'front_r': (mid + side_r * 0.3) * fg,
+            # Estéreo original intacto — âncora da imagem frontal
+            'direct_l': input_l,
+            'direct_r': input_r,
 
-            # Rear carrega conteúdo difuso (side somado), não o Mid
-            'rear':    (side_l + side_r) * self._rear_gain,
+            # Conteúdo difuso para os sides (decorrelado)
+            'side_l':   side_l * self._side_gain,
+            'side_r':   side_r * self._side_gain,
 
-            'side_l':  side_l * sg,
-            'side_r':  side_r * sg,
+            # Rear: componente difusa, não o Mid
+            'rear':     (side_l + side_r) * self._rear_gain,
         }
                     
