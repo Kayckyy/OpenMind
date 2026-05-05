@@ -7,7 +7,7 @@ self.onmessage = async (e) => {
 
   if (type === 'start') {
     stopped = false;
-    const { wsUrl, params, audioData, sampleRate } = payload;
+    const { wsUrl, params, audioData } = payload;
 
     ws = new WebSocket(wsUrl);
     ws.binaryType = 'arraybuffer';
@@ -15,7 +15,32 @@ self.onmessage = async (e) => {
     ws.onopen = () => {
       ws.send(JSON.stringify(params));
       self.postMessage({ type: 'status', msg: 'Streaming...' });
-      sendChunks(audioData, sampleRate);
+      sendChunks(audioData);
+    };
+
+    ws.onmessage = (event) => {
+      if (typeof event.data === 'string') {
+        const msg = JSON.parse(event.data);
+        self.postMessage({ type: 'status', msg: msg.status });
+        return;
+      }
+      self.postMessage({ type: 'chunk', buffer: event.data }, [event.data]);
+    };
+
+    ws.onclose = () => self.postMessage({ type: 'done' });
+    ws.onerror = () => self.postMessage({ type: 'error' });
+  }
+
+  if (type === 'start_youtube') {
+    stopped = false;
+    const { wsUrl, params } = payload;
+
+    ws = new WebSocket(wsUrl);
+    ws.binaryType = 'arraybuffer';
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify(params));
+      self.postMessage({ type: 'status', msg: 'Connecting...' });
     };
 
     ws.onmessage = (event) => {
@@ -37,7 +62,7 @@ self.onmessage = async (e) => {
   }
 };
 
-async function sendChunks(audioData, sampleRate) {
+async function sendChunks(audioData) {
   const chL = new Float32Array(audioData.left);
   const chR = new Float32Array(audioData.right);
 
