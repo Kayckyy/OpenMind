@@ -27,7 +27,7 @@ class Upmix:
 
         # Ganhos alvo
         target_front = max(0.0, corr)
-        target_rear  = max(0.0, -corr) * 0.7
+        target_rear = (1.0 - abs(corr)) * 0.4
         target_side  = (1.0 - abs(corr)) * 1.2
 
         # Suavização exponencial
