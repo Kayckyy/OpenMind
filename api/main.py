@@ -25,7 +25,7 @@ app.add_middleware(
 HRTF_DIR = "hrtf/sadie"
 TARGET_SR = 44100
 CHUNK = 4096
-TMP_PATH = "/data/data/com.termux/files/usr/tmp/yt_cache.wav"
+TMP_PATH = "/data/data/com.termux/files/home/OpenMind/cache/yt_cache.wav"
 loader = IrLoader(HRTF_DIR)
 resampler = Resampler()
 audio_cache: dict = {}
@@ -70,7 +70,7 @@ def download_audio(query: str) -> np.ndarray:
     ydl_opts = {
         'format': 'bestaudio/best',
         'quiet': True,
-        'outtmpl': '/tmp/yt_cache.%(ext)s',
+        'outtmpl': '/data/data/com.termux/files/home/OpenMind/cache/yt_cache.%(ext)s',
         'postprocessors': [{
             'key': 'FFmpegExtractAudio',
             'preferredcodec': 'wav',
