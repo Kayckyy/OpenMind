@@ -71,6 +71,7 @@ def download_audio(query: str) -> np.ndarray:
         'format': 'bestaudio/best',
         'quiet': True,
         'outtmpl': '/data/data/com.termux/files/home/OpenMind/cache/yt_cache.%(ext)s',
+        'ffmpeg_location': '/data/data/com.termux/files/usr/bin/ffmpeg',
         'postprocessors': [{
             'key': 'FFmpegExtractAudio',
             'preferredcodec': 'wav',
