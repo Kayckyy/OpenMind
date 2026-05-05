@@ -78,8 +78,9 @@
       const el_r = document.getElementById('el_r').value;
 
       try {
+        const host = window.location.hostname;
         const res = await fetch(
-          `http://localhost:8000/process?az_l=${az_l}&el_l=${el_l}&az_r=${az_r}&el_r=${el_r}`,
+          `http://${host}:8000/process?az_l=${az_l}&el_l=${el_l}&az_r=${az_r}&el_r=${el_r}`,
           { method: 'POST', body: form }
         );
 
