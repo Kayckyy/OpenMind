@@ -64,7 +64,7 @@ class ConvolutionEngine:
         side_rr = self._overlap_add(channels['side_r'], self.irs['side_rr'],  self._overlaps['side_rr'])
 
         # Mix binaural final
-        out_l = (front_l + rear_l + side_ll + side_rl) * 0.35
-        out_r = (front_r + rear_r + side_lr + side_rr) * 0.35
-
+        out_l = (front_l * 0.6 + rear_l * 0.3 + side_ll * 1.0 + side_rl * 0.8) * 0.35
+        out_r = (front_r * 0.6 + rear_r * 0.3 + side_lr * 0.8 + side_rr * 1.0) * 0.35
+                          
         return out_l.astype(np.float32), out_r.astype(np.float32)
