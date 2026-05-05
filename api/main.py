@@ -39,14 +39,17 @@ def ir_filename(az: float, el: float) -> str:
 
 def load_engine(az_l: float, el_l: float,
                 az_r: float, el_r: float) -> ConvolutionEngine:
-    _, ll_l, ll_r = loader.load(ir_filename(az_l, el_l))
-    _, lr_l, lr_r = loader.load(ir_filename(az_l, el_l))
-    _, rl_l, rl_r = loader.load(ir_filename(az_r, el_r))
-    _, rr_l, rr_r = loader.load(ir_filename(az_r, el_r))
+
+    _, front_l, front_r = loader.load("azi_0,0_ele_0,0.wav")
+    _, rear_l,  rear_r  = loader.load("azi_180,0_ele_0,0.wav")
+    _, side_l,  side_r  = loader.load("azi_90,0_ele_0,0.wav")
+    _, side_rl, side_rr = loader.load("azi_270,0_ele_0,0.wav")
 
     return ConvolutionEngine(
-        ir_ll=ll_l, ir_lr=ll_r,
-        ir_rl=rl_l, ir_rr=rl_r
+        ir_front_l=front_l, ir_front_r=front_r,
+        ir_rear_l=rear_l,   ir_rear_r=rear_r,
+        ir_side_ll=side_l,  ir_side_lr=side_r,
+        ir_side_rl=side_rl, ir_side_rr=side_rr,
     )
 
 
