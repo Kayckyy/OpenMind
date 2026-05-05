@@ -3,13 +3,6 @@ from engine.upmix import Upmix
 
 
 class ConvolutionEngine:
-    """
-    Mix binaural aditivo:
-    - direct_l/r passa pela IR frontal e vai direto pro output com ganho alto
-    - sides e rear são convoluídos e somados em cima com ganho menor
-    - resultado: 360° sem colapsar a imagem estéreo original
-    """
-
     def __init__(self, ir_front_l, ir_front_r,
                        ir_rear_l,  ir_rear_r,
                        ir_side_ll, ir_side_lr,
@@ -26,6 +19,8 @@ class ConvolutionEngine:
         }
         self.upmix = Upmix()
         self._init_overlaps()
+        self._smooth_gain = 1.0   # ganho suavizado entre blocos
+        self._gain_smooth = 0.995 # constante alta = mudança muito lenta (~200 blocos)
 
     def _init_overlaps(self):
         self._overlaps = {
@@ -35,6 +30,7 @@ class ConvolutionEngine:
 
     def reset(self):
         self._init_overlaps()
+        self._smooth_gain = 1.0
 
     def _overlap_add(self, signal: np.ndarray,
                      ir: np.ndarray,
@@ -59,43 +55,44 @@ class ConvolutionEngine:
                       input_r: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         channels = self.upmix.process(input_l, input_r)
 
-        # Front: estéreo direto convoluído com IR frontal (âncora da imagem)
         front_l = self._overlap_add(channels['direct_l'], self.irs['front_l'], self._overlaps['front_l'])
         front_r = self._overlap_add(channels['direct_r'], self.irs['front_r'], self._overlaps['front_r'])
 
-        # Rear: conteúdo difuso convoluído com IR traseira
         rear_l  = self._overlap_add(channels['rear'], self.irs['rear_l'], self._overlaps['rear_l'])
         rear_r  = self._overlap_add(channels['rear'], self.irs['rear_r'], self._overlaps['rear_r'])
 
-        # Sides: conteúdo lateral decorrelado convoluído com IR lateral
         side_ll = self._overlap_add(channels['side_l'], self.irs['side_ll'], self._overlaps['side_ll'])
         side_lr = self._overlap_add(channels['side_l'], self.irs['side_lr'], self._overlaps['side_lr'])
         side_rl = self._overlap_add(channels['side_r'], self.irs['side_rl'], self._overlaps['side_rl'])
         side_rr = self._overlap_add(channels['side_r'], self.irs['side_rr'], self._overlaps['side_rr'])
 
-        # Mix aditivo:
-        # Front domina (0.75) — preserva centro e imagem original
-        # Sides adicionam largura (0.30 direto, 0.10 crossfeed)
-        # Rear adiciona profundidade (0.15) sem puxar a imagem pra trás
         out_l = (
             front_l * 0.75 +
-            side_ll * 0.30 +   # lado esquerdo direto
-            side_rl * 0.10 +   # crossfeed direito→esquerdo (leve)
+            side_ll * 0.30 +
+            side_rl * 0.10 +
             rear_l  * 0.15
         )
 
         out_r = (
             front_r * 0.75 +
-            side_rr * 0.30 +   # lado direito direto
-            side_lr * 0.10 +   # crossfeed esquerdo→direito (leve)
+            side_rr * 0.30 +
+            side_lr * 0.10 +
             rear_r  * 0.15
         )
 
-        # Normalização suave para evitar clipping sem esmagar dinâmica
-        peak = max(np.max(np.abs(out_l)), np.max(np.abs(out_r)), 1e-10)
-        if peak > 0.95:
-            out_l = out_l * (0.95 / peak)
-            out_r = out_r * (0.95 / peak)
+        # Calcula ganho alvo baseado em RMS
+        rms_in  = np.sqrt((np.mean(input_l**2) + np.mean(input_r**2)) * 0.5 + 1e-10)
+        rms_out = np.sqrt((np.mean(out_l**2)   + np.mean(out_r**2))   * 0.5 + 1e-10)
+        target_gain = np.clip(rms_in / rms_out, 0.25, 4.0)
 
-        return out_l.astype(np.float32), out_r.astype(np.float32)
+        # Suaviza o ganho entre blocos — elimina tremolo
+        self._smooth_gain = (
+            self._gain_smooth * self._smooth_gain +
+            (1.0 - self._gain_smooth) * target_gain
+        )
+
+        out_l = (out_l * self._smooth_gain).astype(np.float32)
+        out_r = (out_r * self._smooth_gain).astype(np.float32)
+
+        return out_l, out_r
                           
