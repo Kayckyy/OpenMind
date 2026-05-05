@@ -7,16 +7,18 @@ class ConvolutionEngine:
         self.ir_lr = ir_lr
         self.ir_rl = ir_rl
         self.ir_rr = ir_rr
+        self._init_overlaps()
 
-        ir_len = max(len(ir_ll), len(ir_lr), len(ir_rl), len(ir_rr))
-        self._overlap_l = np.zeros(ir_len - 1, dtype=np.float32)
-        self._overlap_r = np.zeros(ir_len - 1, dtype=np.float32)
-
-    def reset(self):
+    def _init_overlaps(self):
         ir_len = max(len(self.ir_ll), len(self.ir_lr),
                      len(self.ir_rl), len(self.ir_rr))
-        self._overlap_l = np.zeros(ir_len - 1, dtype=np.float32)
-        self._overlap_r = np.zeros(ir_len - 1, dtype=np.float32)
+        self._ov_ll = np.zeros(ir_len - 1, dtype=np.float32)
+        self._ov_lr = np.zeros(ir_len - 1, dtype=np.float32)
+        self._ov_rl = np.zeros(ir_len - 1, dtype=np.float32)
+        self._ov_rr = np.zeros(ir_len - 1, dtype=np.float32)
+
+    def reset(self):
+        self._init_overlaps()
 
     def _overlap_add(self, signal, ir, overlap):
         ir_len = len(ir)
@@ -29,27 +31,20 @@ class ConvolutionEngine:
         conv = np.fft.irfft(block_fft * ir_fft, n=fft_size)
         conv = conv[:len(signal) + ir_len - 1].astype(np.float32)
 
-        # Aplica overlap
         ov_len = len(overlap)
         conv[:ov_len] += overlap
-
-        # Salva novo overlap
         overlap[:] = conv[len(signal):len(signal) + ov_len]
 
         return conv[:len(signal)]
 
     def process(self, input_l, input_r):
-        ll = self._overlap_add(input_l, self.ir_ll, self._overlap_l)
-        lr = self._overlap_add(input_l, self.ir_lr, self._overlap_r)
-        rl = self._overlap_add(input_r, self.ir_rl, self._overlap_l)
-        rr = self._overlap_add(input_r, self.ir_rr, self._overlap_r)
+        ll = self._overlap_add(input_l, self.ir_ll, self._ov_ll)
+        lr = self._overlap_add(input_l, self.ir_lr, self._ov_lr)
+        rl = self._overlap_add(input_r, self.ir_rl, self._ov_rl)
+        rr = self._overlap_add(input_r, self.ir_rr, self._ov_rr)
 
         out_l = ll + rl
         out_r = lr + rr
 
-        peak = max(np.max(np.abs(out_l)), np.max(np.abs(out_r)))
-        if peak > 0:
-            out_l = out_l / peak
-            out_r = out_r / peak
-
+        # Remove normalização por chunk — deixa o nível natural
         return out_l.astype(np.float32), out_r.astype(np.float32)
