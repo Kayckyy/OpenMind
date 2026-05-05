@@ -21,10 +21,10 @@ class ConvolutionEngine:
         self._init_overlaps()
 
     def _init_overlaps(self):
-        ir_len = max(len(ir) for ir in self.irs.values())
+        # Cada IR tem seu próprio tamanho de overlap — sem desperdício de memória
         self._overlaps = {
-            k: np.zeros(ir_len - 1, dtype=np.float32)
-            for k in self.irs
+            k: np.zeros(len(ir) - 1, dtype=np.float32)
+            for k, ir in self.irs.items()
         }
 
     def reset(self):
@@ -53,18 +53,35 @@ class ConvolutionEngine:
                       input_r: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         channels = self.upmix.process(input_l, input_r)
 
-        # Convolui cada canal com seu IR
-        front_l = self._overlap_add(channels['front'],  self.irs['front_l'],  self._overlaps['front_l'])
-        front_r = self._overlap_add(channels['front'],  self.irs['front_r'],  self._overlaps['front_r'])
-        rear_l  = self._overlap_add(channels['rear'],   self.irs['rear_l'],   self._overlaps['rear_l'])
-        rear_r  = self._overlap_add(channels['rear'],   self.irs['rear_r'],   self._overlaps['rear_r'])
-        side_ll = self._overlap_add(channels['side_l'], self.irs['side_ll'],  self._overlaps['side_ll'])
-        side_lr = self._overlap_add(channels['side_l'], self.irs['side_lr'],  self._overlaps['side_lr'])
-        side_rl = self._overlap_add(channels['side_r'], self.irs['side_rl'],  self._overlaps['side_rl'])
-        side_rr = self._overlap_add(channels['side_r'], self.irs['side_rr'],  self._overlaps['side_rr'])
+        # Front agora tem L/R separados vindos do upmix
+        front_l = self._overlap_add(channels['front_l'], self.irs['front_l'], self._overlaps['front_l'])
+        front_r = self._overlap_add(channels['front_r'], self.irs['front_r'], self._overlaps['front_r'])
 
-        # Mix binaural final
-        out_l = (front_l * 0.6 + rear_l * 0.3 + side_ll * 1.0 + side_rl * 0.8) * 0.35
-        out_r = (front_r * 0.6 + rear_r * 0.3 + side_lr * 0.8 + side_rr * 1.0) * 0.35
-                          
+        rear_l  = self._overlap_add(channels['rear'],    self.irs['rear_l'],  self._overlaps['rear_l'])
+        rear_r  = self._overlap_add(channels['rear'],    self.irs['rear_r'],  self._overlaps['rear_r'])
+
+        side_ll = self._overlap_add(channels['side_l'],  self.irs['side_ll'], self._overlaps['side_ll'])
+        side_lr = self._overlap_add(channels['side_l'],  self.irs['side_lr'], self._overlaps['side_lr'])
+        side_rl = self._overlap_add(channels['side_r'],  self.irs['side_rl'], self._overlaps['side_rl'])
+        side_rr = self._overlap_add(channels['side_r'],  self.irs['side_rr'], self._overlaps['side_rr'])
+
+        # Mix binaural corrigido:
+        # - Canal direto (ipsilateral): ganho maior
+        # - Crossfeed (contralateral): ganho menor — preserva largura estéreo
+        # - Rear com ganho reduzido para não vazar Mid no traseiro
+        out_l = (
+            front_l * 0.60 +
+            rear_l  * 0.18 +
+            side_ll * 1.00 +   # side esquerdo → ouvido esquerdo (direto)
+            side_rl * 0.35     # side direito  → ouvido esquerdo (crossfeed reduzido)
+        ) * 0.35
+
+        out_r = (
+            front_r * 0.60 +
+            rear_r  * 0.18 +
+            side_rr * 1.00 +   # side direito  → ouvido direito (direto)
+            side_lr * 0.35     # side esquerdo → ouvido direito (crossfeed reduzido)
+        ) * 0.35
+
         return out_l.astype(np.float32), out_r.astype(np.float32)
+                          
