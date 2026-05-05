@@ -12,15 +12,15 @@
     label { display: block; margin-bottom: 4px; font-size: 0.85rem; color: #aaa; }
     input[type=range] { width: 100%; }
     input[type=file] { color: #eee; }
+    .buttons { display: flex; gap: 8px; margin-top: 16px; }
     button {
-      margin-top: 16px; padding: 12px 24px;
-      background: #7c3aed; color: white;
-      border: none; border-radius: 8px;
-      font-size: 1rem; cursor: pointer; width: 100%;
+      padding: 12px 24px; border: none; border-radius: 8px;
+      font-size: 1rem; cursor: pointer; flex: 1;
     }
-    button:disabled { background: #444; cursor: not-allowed; }
+    #btnPlay { background: #7c3aed; color: white; }
+    #btnStop { background: #444; color: white; }
+    button:disabled { background: #333; color: #666; cursor: not-allowed; }
     #status { margin-top: 12px; font-size: 0.85rem; color: #aaa; }
-    audio { margin-top: 16px; width: 100%; }
   </style>
 </head>
 <body>
@@ -55,48 +55,127 @@
       oninput="document.getElementById('el_r_val').textContent = this.value + '°'">
   </div>
 
-  <button id="btn" onclick="process()">Process & Play</button>
+  <div class="buttons">
+    <button id="btnPlay" onclick="startStream()">▶ Play</button>
+    <button id="btnStop" onclick="stopStream()" disabled>■ Stop</button>
+  </div>
   <div id="status"></div>
-  <audio id="player" controls></audio>
 
   <script>
-    async function process() {
+    let ws = null;
+    let audioCtx = null;
+    let nextTime = 0;
+    let reader = null;
+    let stopped = false;
+
+    const CHUNK_SIZE = 4096; // samples por chunk
+    const SR = 44100;
+
+    function setStatus(msg) {
+      document.getElementById('status').textContent = msg;
+    }
+
+    async function startStream() {
       const file = document.getElementById('file').files[0];
       if (!file) { alert('Select a file first'); return; }
 
-      const btn = document.getElementById('btn');
-      const status = document.getElementById('status');
-      btn.disabled = true;
-      status.textContent = 'Processing...';
+      stopped = false;
+      document.getElementById('btnPlay').disabled = true;
+      document.getElementById('btnStop').disabled = false;
+      setStatus('Connecting...');
 
-      const form = new FormData();
-      form.append('file', file);
+      audioCtx = new AudioContext({ sampleRate: SR });
+      nextTime = audioCtx.currentTime + 0.1;
 
-      const az_l = document.getElementById('az_l').value;
-      const az_r = document.getElementById('az_r').value;
-      const el_l = document.getElementById('el_l').value;
-      const el_r = document.getElementById('el_r').value;
+      const host = window.location.hostname;
+      ws = new WebSocket(`ws://${host}:8000/stream`);
+      ws.binaryType = 'arraybuffer';
 
-      try {
-        const host = window.location.hostname;
-        const res = await fetch(
-          `http://${host}:8000/process?az_l=${az_l}&el_l=${el_l}&az_r=${az_r}&el_r=${el_r}`,
-          { method: 'POST', body: form }
-        );
+      ws.onopen = async () => {
+        setStatus('Streaming...');
 
-        if (!res.ok) throw new Error('API error');
+        // Envia parâmetros
+        ws.send(JSON.stringify({
+          az_l: document.getElementById('az_l').value,
+          el_l: document.getElementById('el_l').value,
+          az_r: document.getElementById('az_r').value,
+          el_r: document.getElementById('el_r').value,
+        }));
 
-        const blob = await res.blob();
-        const url = URL.createObjectURL(blob);
-        const player = document.getElementById('player');
-        player.src = url;
-        player.play();
-        status.textContent = 'Done!';
-      } catch (e) {
-        status.textContent = 'Error: ' + e.message;
-      } finally {
-        btn.disabled = false;
-      }
+        // Decodifica o arquivo
+        const arrayBuffer = await file.arrayBuffer();
+        const decoded = await audioCtx.decodeAudioData(arrayBuffer);
+
+        // Pega L e R
+        const chL = decoded.getChannelData(0);
+        const chR = decoded.numberOfChannels > 1
+          ? decoded.getChannelData(1)
+          : decoded.getChannelData(0);
+
+        // Manda chunk a chunk
+        for (let i = 0; i < chL.length; i += CHUNK_SIZE) {
+          if (stopped) break;
+
+          const blockL = chL.slice(i, i + CHUNK_SIZE);
+          const blockR = chR.slice(i, i + CHUNK_SIZE);
+
+          // Intercala L e R
+          const interleaved = new Float32Array(blockL.length + blockR.length);
+          for (let j = 0; j < blockL.length; j++) {
+            interleaved[j * 2] = blockL[j];
+            interleaved[j * 2 + 1] = blockR[j];
+          }
+
+          ws.send(interleaved.buffer);
+
+          // Aguarda um pouco pra não saturar
+          await new Promise(r => setTimeout(r, 10));
+        }
+
+        if (!stopped) ws.send(new TextEncoder().encode('END'));
+      };
+
+      ws.onmessage = (event) => {
+        const samples = new Float32Array(event.data);
+        const frameCount = samples.length / 2;
+
+        const buffer = audioCtx.createBuffer(2, frameCount, SR);
+        const outL = buffer.getChannelData(0);
+        const outR = buffer.getChannelData(1);
+
+        for (let i = 0; i < frameCount; i++) {
+          outL[i] = samples[i * 2];
+          outR[i] = samples[i * 2 + 1];
+        }
+
+        const source = audioCtx.createBufferSource();
+        source.buffer = buffer;
+        source.connect(audioCtx.destination);
+
+        const when = Math.max(nextTime, audioCtx.currentTime + 0.05);
+        source.start(when);
+        nextTime = when + buffer.duration;
+      };
+
+      ws.onclose = () => {
+        setStatus('Done.');
+        document.getElementById('btnPlay').disabled = false;
+        document.getElementById('btnStop').disabled = true;
+      };
+
+      ws.onerror = (e) => {
+        setStatus('WebSocket error.');
+        console.error(e);
+      };
+    }
+
+    function stopStream() {
+      stopped = true;
+      if (ws) ws.close();
+      if (audioCtx) audioCtx.close();
+      document.getElementById('btnPlay').disabled = false;
+      document.getElementById('btnStop').disabled = true;
+      setStatus('Stopped.');
     }
   </script>
 </body>
