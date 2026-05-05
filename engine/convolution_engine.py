@@ -36,18 +36,14 @@ class ConvolutionEngine:
         overlap[:] = conv[len(signal):len(signal) + ov_len]
 
         return conv[:len(signal)]
-        
+
     def process(self, input_l, input_r):
         ll = self._overlap_add(input_l, self.ir_ll, self._ov_ll)
         lr = self._overlap_add(input_l, self.ir_lr, self._ov_lr)
         rl = self._overlap_add(input_r, self.ir_rl, self._ov_rl)
         rr = self._overlap_add(input_r, self.ir_rr, self._ov_rr)
+
         out_l = (ll + rl) * 0.5
         out_r = (lr + rr) * 0.5
 
-    return out_l.astype(np.float32), out_r.astype(np.float32)
-        out_l = ll + rl
-        out_r = lr + rr
-
-        # Remove normalização por chunk — deixa o nível natural
         return out_l.astype(np.float32), out_r.astype(np.float32)
