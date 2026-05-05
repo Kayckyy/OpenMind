@@ -25,8 +25,7 @@ app.add_middleware(
 HRTF_DIR = "hrtf/sadie"
 TARGET_SR = 44100
 CHUNK = 4096
-TMP_PATH = "/tmp/yt_cache.wav"
-
+TMP_PATH = "/data/data/com.termux/files/usr/tmp/yt_cache.wav"
 loader = IrLoader(HRTF_DIR)
 resampler = Resampler()
 audio_cache: dict = {}
