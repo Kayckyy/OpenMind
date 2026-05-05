@@ -92,152 +92,132 @@
   <div id="status"></div>
 
   <script>
-    let ws = null;
-    let audioCtx = null;
-    let nextTime = 0;
-    let stopped = false;
-    const SR = 44100;
-    const CHUNK_SIZE = 4096;
+    let worker = null;
+let audioCtx = null;
+let nextTime = 0;
+const SR = 44100;
 
-    function setStatus(msg) {
-      document.getElementById('status').textContent = msg;
+function setStatus(msg) {
+  document.getElementById('status').textContent = msg;
+}
+
+function getParams() {
+  return {
+    az_l: document.getElementById('az_l').value,
+    el_l: document.getElementById('el_l').value,
+    az_r: document.getElementById('az_r').value,
+    el_r: document.getElementById('el_r').value,
+  };
+}
+
+function initAudio() {
+  audioCtx = new AudioContext({ sampleRate: SR });
+  nextTime = audioCtx.currentTime + 0.2;
+}
+
+function handleChunk(buffer) {
+  const samples = new Float32Array(buffer);
+  const frameCount = samples.length / 2;
+  const audioBuf = audioCtx.createBuffer(2, frameCount, SR);
+  const outL = audioBuf.getChannelData(0);
+  const outR = audioBuf.getChannelData(1);
+
+  for (let i = 0; i < frameCount; i++) {
+    outL[i] = samples[i * 2];
+    outR[i] = samples[i * 2 + 1];
+  }
+
+  const source = audioCtx.createBufferSource();
+  source.buffer = audioBuf;
+  source.connect(audioCtx.destination);
+
+  const when = Math.max(nextTime, audioCtx.currentTime + 0.05);
+  source.start(when);
+  nextTime = when + audioBuf.duration;
+}
+
+function stopStream() {
+  if (worker) { worker.postMessage({ type: 'stop' }); worker = null; }
+  if (audioCtx) { audioCtx.close(); audioCtx = null; }
+  document.getElementById('btnPlay').disabled = false;
+  document.getElementById('btnStop').disabled = true;
+  setStatus('');
+}
+
+// ── YouTube ──────────────────────────────────────────
+
+async function startYoutube() {
+  const query = document.getElementById('ytQuery').value.trim();
+  if (!query) { alert('Enter a search term or YouTube URL'); return; }
+
+  stopStream();
+  initAudio();
+
+  const host = window.location.hostname;
+  worker = new Worker('worker.js');
+
+  worker.onmessage = (e) => {
+    const { type, msg, buffer } = e.data;
+    if (type === 'status') setStatus(msg);
+    if (type === 'chunk')  handleChunk(buffer);
+    if (type === 'done')   { setStatus('Done.'); stopStream(); }
+    if (type === 'error')  setStatus('Connection error.');
+  };
+
+  worker.postMessage({
+    type: 'start_youtube',
+    payload: {
+      wsUrl: `ws://${host}:8000/stream/youtube`,
+      params: { query, ...getParams() },
     }
+  });
 
-    function getParams() {
-      return {
-        az_l: document.getElementById('az_l').value,
-        el_l: document.getElementById('el_l').value,
-        az_r: document.getElementById('az_r').value,
-        el_r: document.getElementById('el_r').value,
-      };
+  document.getElementById('btnStop').disabled = false;
+}
+
+// ── Local file ───────────────────────────────────────
+
+async function startStream() {
+  const file = document.getElementById('file').files[0];
+  if (!file) { alert('Select a file first'); return; }
+
+  stopStream();
+  initAudio();
+
+  document.getElementById('btnPlay').disabled = true;
+  document.getElementById('btnStop').disabled = false;
+
+  const arrayBuffer = await file.arrayBuffer();
+  const decoded = await audioCtx.decodeAudioData(arrayBuffer);
+
+  const left  = decoded.getChannelData(0).buffer.slice(0);
+  const right = decoded.numberOfChannels > 1
+    ? decoded.getChannelData(1).buffer.slice(0)
+    : left;
+
+  const host = window.location.hostname;
+  worker = new Worker('worker.js');
+
+  worker.onmessage = (e) => {
+    const { type, msg, buffer } = e.data;
+    if (type === 'status') setStatus(msg);
+    if (type === 'chunk')  handleChunk(buffer);
+    if (type === 'done')   { setStatus('Done.'); stopStream(); }
+    if (type === 'error')  setStatus('Connection error.');
+  };
+
+  worker.postMessage({
+    type: 'start',
+    payload: {
+      wsUrl: `ws://${host}:8000/stream`,
+      params: getParams(),
+      audioData: { left, right },
+      sampleRate: SR,
     }
+  }, [left, right]);
 
-    function initAudio() {
-      audioCtx = new AudioContext({ sampleRate: SR });
-      nextTime = audioCtx.currentTime + 0.2;
-    }
-
-    function handleChunk(event) {
-      if (typeof event.data === 'string') {
-        const msg = JSON.parse(event.data);
-        setStatus(msg.status === 'downloading' ? 'Downloading...'
-                : msg.status === 'processing'  ? 'Processing...'
-                : msg.status === 'done'         ? 'Done!'
-                : msg.status);
-        return;
-      }
-
-      const samples = new Float32Array(event.data);
-      const frameCount = samples.length / 2;
-      const buffer = audioCtx.createBuffer(2, frameCount, SR);
-      const outL = buffer.getChannelData(0);
-      const outR = buffer.getChannelData(1);
-
-      for (let i = 0; i < frameCount; i++) {
-        outL[i] = samples[i * 2];
-        outR[i] = samples[i * 2 + 1];
-      }
-
-      const source = audioCtx.createBufferSource();
-      source.buffer = buffer;
-      source.connect(audioCtx.destination);
-
-      const when = Math.max(nextTime, audioCtx.currentTime + 0.05);
-      source.start(when);
-      nextTime = when + buffer.duration;
-    }
-
-    function onClose() {
-      setStatus('');
-      document.getElementById('btnPlay').disabled = false;
-      document.getElementById('btnStop').disabled = true;
-    }
-
-    // ── YouTube ──────────────────────────────────────────
-
-    async function startYoutube() {
-      const query = document.getElementById('ytQuery').value.trim();
-      if (!query) { alert('Enter a search term or YouTube URL'); return; }
-
-      stopStream();
-      initAudio();
-      stopped = false;
-
-      const host = window.location.hostname;
-      ws = new WebSocket(`ws://${host}:8000/stream/youtube`);
-      ws.binaryType = 'arraybuffer';
-
-      ws.onopen = () => {
-        setStatus('Connecting...');
-        ws.send(JSON.stringify({ query, ...getParams() }));
-      };
-
-      ws.onmessage = handleChunk;
-      ws.onclose = onClose;
-      ws.onerror = () => setStatus('Connection error.');
-
-      document.getElementById('btnStop').disabled = false;
-    }
-
-    // ── Local file ───────────────────────────────────────
-
-    async function startStream() {
-      const file = document.getElementById('file').files[0];
-      if (!file) { alert('Select a file first'); return; }
-
-      stopped = false;
-      document.getElementById('btnPlay').disabled = true;
-      document.getElementById('btnStop').disabled = false;
-      initAudio();
-
-      const host = window.location.hostname;
-      ws = new WebSocket(`ws://${host}:8000/stream`);
-      ws.binaryType = 'arraybuffer';
-
-      ws.onopen = async () => {
-        setStatus('Streaming...');
-        ws.send(JSON.stringify(getParams()));
-
-        const arrayBuffer = await file.arrayBuffer();
-        const decoded = await audioCtx.decodeAudioData(arrayBuffer);
-
-        const chL = decoded.getChannelData(0);
-        const chR = decoded.numberOfChannels > 1
-          ? decoded.getChannelData(1)
-          : decoded.getChannelData(0);
-
-        for (let i = 0; i < chL.length; i += CHUNK_SIZE) {
-          if (stopped) break;
-
-          const blockL = chL.slice(i, i + CHUNK_SIZE);
-          const blockR = chR.slice(i, i + CHUNK_SIZE);
-
-          const interleaved = new Float32Array(blockL.length + blockR.length);
-          for (let j = 0; j < blockL.length; j++) {
-            interleaved[j * 2] = blockL[j];
-            interleaved[j * 2 + 1] = blockR[j];
-          }
-
-          ws.send(interleaved.buffer);
-          await new Promise(r => setTimeout(r, 10));
-        }
-
-        if (!stopped) ws.send(new TextEncoder().encode('END'));
-      };
-
-      ws.onmessage = handleChunk;
-      ws.onclose = onClose;
-      ws.onerror = () => setStatus('Connection error.');
-    }
-
-    function stopStream() {
-      stopped = true;
-      if (ws) { ws.close(); ws = null; }
-      if (audioCtx) { audioCtx.close(); audioCtx = null; }
-      document.getElementById('btnPlay').disabled = false;
-      document.getElementById('btnStop').disabled = true;
-      setStatus('');
-    }
+  setStatus('Streaming...');
+}
   </script>
 </body>
 </html>
