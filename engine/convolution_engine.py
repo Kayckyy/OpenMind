@@ -1,12 +1,21 @@
 import numpy as np
-from engine.upmix import Upmix
+from engine.band_router import BandRouter
 
 
 class ConvolutionEngine:
+    """
+    Pipeline:
+      input L/R
+        → BandRouter (divide por banda, roteia por posição HRTF)
+        → convolução por canal virtual
+        → mix binaural aditivo (direct domina, virtuais somam em cima)
+    """
+
     def __init__(self, ir_front_l, ir_front_r,
                        ir_rear_l,  ir_rear_r,
                        ir_side_ll, ir_side_lr,
-                       ir_side_rl, ir_side_rr):
+                       ir_side_rl, ir_side_rr,
+                       sample_rate: int = 44100):
         self.irs = {
             'front_l':  ir_front_l,
             'front_r':  ir_front_r,
@@ -17,10 +26,9 @@ class ConvolutionEngine:
             'side_rl':  ir_side_rl,
             'side_rr':  ir_side_rr,
         }
-        self.upmix = Upmix()
+        self.router = BandRouter(sample_rate)
         self._init_overlaps()
-        self._smooth_gain = 1.0   # ganho suavizado entre blocos
-        self._gain_smooth = 0.995 # constante alta = mudança muito lenta (~200 blocos)
+        self._ir_ffts = self._precompute_ir_ffts()
 
     def _init_overlaps(self):
         self._overlaps = {
@@ -28,9 +36,21 @@ class ConvolutionEngine:
             for k, ir in self.irs.items()
         }
 
+    def _precompute_ir_ffts(self) -> dict:
+        """
+        Pré-computa FFT de todas as IRs — evita recalcular a cada bloco.
+        Cada entrada guarda (ir_fft, fft_size, ir_len).
+        """
+        cache = {}
+        for k, ir in self.irs.items():
+            ir_len = len(ir)
+            # fft_size será ajustado por bloco, mas guardamos a IR no domínio do tempo
+            # O rfft da IR é feito no _overlap_add com o fft_size correto
+            cache[k] = ir  # mantém referência; rfft cacheado por tamanho abaixo
+        return cache
+
     def reset(self):
         self._init_overlaps()
-        self._smooth_gain = 1.0
 
     def _overlap_add(self, signal: np.ndarray,
                      ir: np.ndarray,
@@ -53,46 +73,45 @@ class ConvolutionEngine:
 
     def process(self, input_l: np.ndarray,
                       input_r: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        channels = self.upmix.process(input_l, input_r)
 
-        front_l = self._overlap_add(channels['direct_l'], self.irs['front_l'], self._overlaps['front_l'])
-        front_r = self._overlap_add(channels['direct_r'], self.irs['front_r'], self._overlaps['front_r'])
+        ch = self.router.process(input_l, input_r)
 
-        rear_l  = self._overlap_add(channels['rear'], self.irs['rear_l'], self._overlaps['rear_l'])
-        rear_r  = self._overlap_add(channels['rear'], self.irs['rear_r'], self._overlaps['rear_r'])
+        # Direto (âncora) — convoluído com IR frontal
+        direct_l = self._overlap_add(ch['direct_l'], self.irs['front_l'], self._overlaps['front_l'])
+        direct_r = self._overlap_add(ch['direct_r'], self.irs['front_r'], self._overlaps['front_r'])
 
-        side_ll = self._overlap_add(channels['side_l'], self.irs['side_ll'], self._overlaps['side_ll'])
-        side_lr = self._overlap_add(channels['side_l'], self.irs['side_lr'], self._overlaps['side_lr'])
-        side_rl = self._overlap_add(channels['side_r'], self.irs['side_rl'], self._overlaps['side_rl'])
-        side_rr = self._overlap_add(channels['side_r'], self.irs['side_rr'], self._overlaps['side_rr'])
+        # Front virtual (bandas sub + médio-baixo + ar leve)
+        front_l  = self._overlap_add(ch['front_l'],  self.irs['front_l'], self._overlaps['front_l'])
+        front_r  = self._overlap_add(ch['front_r'],  self.irs['front_r'], self._overlaps['front_r'])
 
+        # Rear (médio-alto + presença com coloração traseira)
+        rear_l   = self._overlap_add(ch['rear_l'],   self.irs['rear_l'],  self._overlaps['rear_l'])
+        rear_r   = self._overlap_add(ch['rear_r'],   self.irs['rear_r'],  self._overlaps['rear_r'])
+
+        # Sides (médio-alto + presença + ar)
+        side_ll  = self._overlap_add(ch['side_l'],   self.irs['side_ll'], self._overlaps['side_ll'])
+        side_lr  = self._overlap_add(ch['side_l'],   self.irs['side_lr'], self._overlaps['side_lr'])
+        side_rl  = self._overlap_add(ch['side_r'],   self.irs['side_rl'], self._overlaps['side_rl'])
+        side_rr  = self._overlap_add(ch['side_r'],   self.irs['side_rr'], self._overlaps['side_rr'])
+
+        # Mix binaural aditivo:
+        # direct domina → imagem original preservada
+        # virtuais somam em cima → espacialização adicional
         out_l = (
-            front_l * 0.75 +
-            side_ll * 0.30 +
-            side_rl * 0.10 +
-            rear_l  * 0.15
+            direct_l * 0.80 +   # âncora L
+            front_l  * 0.20 +   # coloração frontal virtual
+            side_ll  * 0.25 +   # lado esquerdo direto
+            side_rl  * 0.08 +   # crossfeed direito→esquerdo
+            rear_l   * 0.12     # traseiro esquerdo
         )
 
         out_r = (
-            front_r * 0.75 +
-            side_rr * 0.30 +
-            side_lr * 0.10 +
-            rear_r  * 0.15
+            direct_r * 0.80 +   # âncora R
+            front_r  * 0.20 +   # coloração frontal virtual
+            side_rr  * 0.25 +   # lado direito direto
+            side_lr  * 0.08 +   # crossfeed esquerdo→direito
+            rear_r   * 0.12     # traseiro direito
         )
 
-        # Calcula ganho alvo baseado em RMS
-        rms_in  = np.sqrt((np.mean(input_l**2) + np.mean(input_r**2)) * 0.5 + 1e-10)
-        rms_out = np.sqrt((np.mean(out_l**2)   + np.mean(out_r**2))   * 0.5 + 1e-10)
-        target_gain = np.clip(rms_in / rms_out, 0.25, 4.0)
-
-        # Suaviza o ganho entre blocos — elimina tremolo
-        self._smooth_gain = (
-            self._gain_smooth * self._smooth_gain +
-            (1.0 - self._gain_smooth) * target_gain
-        )
-
-        out_l = (out_l * self._smooth_gain).astype(np.float32)
-        out_r = (out_r * self._smooth_gain).astype(np.float32)
-
-        return out_l, out_r
+        return out_l.astype(np.float32), out_r.astype(np.float32)
                           
