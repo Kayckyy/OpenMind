@@ -63,6 +63,11 @@ class ConvolutionEngine:
 
         ir_ffts = self._get_ir_ffts(fft_size)
 
+        # gain de entrada: compensa a amplificação da convolução HRTF
+        gain = 0.35
+        in_l = in_l * gain
+        in_r = in_r * gain
+
         ll = self._convolve_block(in_l, 'll', fft_size, ir_ffts)
         lr = self._convolve_block(in_l, 'lr', fft_size, ir_ffts)
         rl = self._convolve_block(in_r, 'rl', fft_size, ir_ffts)
@@ -71,7 +76,7 @@ class ConvolutionEngine:
         out_l = ll + rl
         out_r = rr + lr
 
-        # sem normalização por bloco — só clip hard pra proteger o DAC
+        # clip só como proteção — não deve ativar com gain=0.35
         np.clip(out_l, -1.0, 1.0, out=out_l)
         np.clip(out_r, -1.0, 1.0, out=out_r)
 
