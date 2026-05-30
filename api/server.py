@@ -61,19 +61,42 @@ def emit_status(msg: dict):
 
 
 # ---------------------------------------------------------------------------
+# IRs disponíveis no SADIE: frente, esquerda, trás, direita
+_IR_MAP = {
+    0:   "azi_0,0_ele_0,0.wav",    # frente
+    90:  "azi_90,0_ele_0,0.wav",   # esquerda
+    180: "azi_180,0_ele_0,0.wav",  # trás
+    270: "azi_270,0_ele_0,0.wav",  # direita
+}
+
+def _nearest_ir(az: float) -> str:
+    az = az % 360.0
+    nearest = min(_IR_MAP.keys(), key=lambda k: min(abs(k - az), 360 - abs(k - az)))
+    return _IR_MAP[nearest]
+
 def build_engine(az: float, el: float) -> ConvolutionEngine:
     loader = IrLoader(HRTF_DIR)
 
-    def az_str(a): return f"{a:.1f}".replace('.', ',')
-    def el_str(e): return f"{e:.1f}".replace('.', ',')
+    # True-Stereo:
+    #   Canal L usa IR do lado esquerdo  (az=90)
+    #   Canal R usa IR do lado direito   (az=270)
+    #   Crossfeed usa IR frontal         (az=0)
+    # Assim out_L = conv(in_L, ir_left) + conv(in_R, ir_front)  <- crossfeed sutil
+    #       out_R = conv(in_R, ir_right) + conv(in_L, ir_front) <- crossfeed sutil
 
-    az_r = (360.0 - az) % 360.0
-    try:
-        _, ll, lr = loader.load(f"azi_{az_str(az)}_ele_{el_str(el)}.wav")
-        _, rl, rr = loader.load(f"azi_{az_str(az_r)}_ele_{el_str(el)}.wav")
-    except FileNotFoundError:
-        _, ll, lr = loader.load("azi_0,0_ele_0,0.wav")
-        rl, rr = ll.copy(), lr.copy()
+    ir_file_l = _nearest_ir(az)           # IR para o canal L (posição solicitada)
+    az_r      = (360.0 - az) % 360.0      # espelha para o canal R
+    ir_file_r = _nearest_ir(az_r)         # IR para o canal R
+    ir_file_x = "azi_0,0_ele_0,0.wav"    # crossfeed frontal (neutro)
+
+    _, ll, _  = loader.load(ir_file_l)    # L → out_L (direto)
+    _, __, lr = loader.load(ir_file_x)    # L → out_R (crossfeed frontal)
+    _, rl, _  = loader.load(ir_file_x)    # R → out_L (crossfeed frontal)
+    _, __, rr = loader.load(ir_file_r)    # R → out_R (direto)
+
+    # atenua crossfeed para não colapsar a imagem estéreo
+    lr = lr * 0.25
+    rl = rl * 0.25
 
     return ConvolutionEngine(ir_ll=ll, ir_lr=lr, ir_rl=rl, ir_rr=rr)
 
@@ -405,4 +428,4 @@ def main():
 
 if __name__ == '__main__':
     main()
-          
+                  
