@@ -297,7 +297,8 @@ def main():
     args = parser.parse_args()
 
     MUSIC_DIR = os.path.expanduser(args.music_dir)
-    os.makedirs(MUSIC_DIR, exist_ok=True)
+    if not os.path.exists(MUSIC_DIR):
+        print(f'[aviso] music-dir não encontrado: {MUSIC_DIR}')
 
     import socket
     try:
@@ -314,4 +315,4 @@ def main():
 
 if __name__ == '__main__':
     main()
-  
+              
