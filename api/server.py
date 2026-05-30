@@ -38,14 +38,16 @@ from urllib.parse import urlparse, parse_qs
 import numpy as np
 import soundfile as sf
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# api/server.py roda de dentro de api/ — sobe um nível pra raiz do projeto
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _ROOT)
 from engine.convolution_engine import ConvolutionEngine
 from engine.ir_loader import IrLoader
 
-HRTF_DIR  = os.path.join(os.path.dirname(__file__), 'hrtf', 'sadie')
+HRTF_DIR  = os.path.join(_ROOT, 'hrtf', 'sadie')
 TARGET_SR = 44100
 BLOCK     = 2048
-CACHE_DIR = os.path.join(os.path.dirname(__file__), 'cache')
+CACHE_DIR = os.path.join(_ROOT, 'cache')
 TMP_WAV   = os.path.join(CACHE_DIR, 'yt_cache.wav')
 FFMPEG    = '/data/data/com.termux/files/usr/bin/ffmpeg'
 
@@ -393,4 +395,4 @@ def main():
 
 if __name__ == '__main__':
     main()
-                
+          
