@@ -4,22 +4,22 @@ OpenMind HTTP Server
 =====================
 Endpoints:
   POST /stream   — envia arquivo, recebe áudio f32le chunked em tempo real
-                   uso: curl ... | ffplay -f f32le -ar 44100 -ac 2 -
   POST /process  — envia arquivo, recebe WAV completo processado
   POST /play     — toca no dispositivo do tablet diretamente
-  GET  /status   — SSE de status (downloading/processing/done/error)
+  GET  /status   — SSE de status
   GET  /health   — health check
 
 Uso rápido no celular:
   curl -s -X POST http://IP:8765/stream \
-    -F "file=@/storage/emulated/0/Music/musica.mp3" \
-    -F "az=0" -F "el=0" | ffplay -nodisp -f f32le -ar 44100 -ac 2 -
+    -F "file=@/storage/emulated/0/Music/musica.opus" \
+    -F "az=30" -F "el=0" | ffplay -nodisp -f f32le -ar 44100 -ch_layout stereo -
 """
 
 import argparse
 import io
 import json
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -29,7 +29,6 @@ from urllib.parse import urlparse
 import numpy as np
 import soundfile as sf
 
-# api/server.py roda de dentro de api/ — sobe um nível pra raiz do projeto
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
 from engine.convolution_engine import ConvolutionEngine
@@ -39,7 +38,6 @@ HRTF_DIR  = os.path.join(_ROOT, 'hrtf', 'sadie')
 TARGET_SR = 44100
 BLOCK     = 2048
 CACHE_DIR = os.path.join(_ROOT, 'cache')
-TMP_WAV   = os.path.join(CACHE_DIR, 'yt_cache.wav')
 FFMPEG    = '/data/data/com.termux/files/usr/bin/ffmpeg'
 
 _status_listeners: list = []
@@ -80,16 +78,6 @@ def build_engine(az: float, el: float) -> ConvolutionEngine:
 
 
 # ---------------------------------------------------------------------------
-def resample_if_needed(data: np.ndarray, sr: int) -> np.ndarray:
-    if sr == TARGET_SR:
-        return data
-    from math import gcd
-    from scipy.signal import resample_poly
-    g = gcd(TARGET_SR, sr)
-    return resample_poly(data, TARGET_SR // g, sr // g).astype(np.float32)
-
-
-# ---------------------------------------------------------------------------
 def parse_multipart(content_type: str, body: bytes) -> dict:
     import email
     msg = email.message_from_bytes(
@@ -108,51 +96,62 @@ def parse_multipart(content_type: str, body: bytes) -> dict:
 
 
 # ---------------------------------------------------------------------------
-def load_audio(file_bytes: bytes) -> tuple[np.ndarray, np.ndarray]:
+def stream_generator_from_bytes(file_bytes: bytes, engine: ConvolutionEngine):
     """
-    Lê arquivo de qualquer formato suportado pelo soundfile/ffmpeg.
-    Retorna (in_l, in_r) como float32 em TARGET_SR.
+    Decodifica via ffmpeg pipe e processa em blocos conforme os dados chegam.
+    Yields chunks f32le interleaved prontos pra enviar — sem carregar tudo na memória.
     """
-    # tenta soundfile direto (WAV, FLAC, OGG, AIFF...)
-    try:
-        raw, sr = sf.read(io.BytesIO(file_bytes), dtype='float32', always_2d=True)
-    except Exception:
-        # fallback: decodifica via ffmpeg pra WAV temporário
-        import subprocess
-        tmp = os.path.join(CACHE_DIR, 'upload_tmp.wav')
-        proc = subprocess.run(
-            [FFMPEG, '-y', '-i', 'pipe:0',
-             '-f', 'wav', '-ar', str(TARGET_SR), '-ac', '2', tmp],
-            input=file_bytes, capture_output=True
-        )
-        if proc.returncode != 0:
-            raise RuntimeError('ffmpeg falhou ao decodificar arquivo')
-        raw, sr = sf.read(tmp, dtype='float32', always_2d=True)
+    BYTES_PER_FRAME = 2 * 4   # stereo * sizeof(float32)
+    READ_BYTES      = BLOCK * BYTES_PER_FRAME
 
-    raw = resample_if_needed(raw, sr)
-    in_l = raw[:, 0]
-    in_r = raw[:, 1] if raw.shape[1] > 1 else raw[:, 0]
-    return in_l, in_r
+    proc = subprocess.Popen(
+        [FFMPEG, '-y', '-i', 'pipe:0',
+         '-f', 'f32le', '-ar', str(TARGET_SR), '-ac', '2', 'pipe:1'],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
 
+    # alimenta o ffmpeg em thread separada pra não bloquear a leitura da saída
+    def _feed():
+        try:
+            proc.stdin.write(file_bytes)
+        finally:
+            proc.stdin.close()
 
-# ---------------------------------------------------------------------------
-def stream_generator(in_l, in_r, engine):
-    for i in range(0, len(in_l), BLOCK):
-        bl = in_l[i:i + BLOCK]
-        br = in_r[i:i + BLOCK]
-        ol, or_ = engine.process(bl, br)
-        length = min(len(ol), len(or_))
-        
-        # garante múltiplo de 2 (frames stereo completos)
-        if length % 2 != 0:
-            length -= 1
-        if length < 2:
+    threading.Thread(target=_feed, daemon=True).start()
+
+    remainder = b''
+    while True:
+        chunk = proc.stdout.read(READ_BYTES)
+        if not chunk:
+            break
+
+        chunk = remainder + chunk
+        remainder = b''
+
+        # descarta bytes que não formam um frame completo
+        usable = (len(chunk) // BYTES_PER_FRAME) * BYTES_PER_FRAME
+        if usable == 0:
+            remainder = chunk
             continue
-            
-        out = np.empty(length * 2, dtype=np.float32)
-        out[0::2] = ol[:length]
-        out[1::2] = or_[:length]
+        if usable < len(chunk):
+            remainder = chunk[usable:]
+            chunk    = chunk[:usable]
+
+        samples = np.frombuffer(chunk, dtype=np.float32)
+        in_l    = samples[0::2]
+        in_r    = samples[1::2]
+
+        ol, or_ = engine.process(in_l, in_r)
+        length  = min(len(ol), len(or_))
+
+        out        = np.empty(length * 2, dtype=np.float32)
+        out[0::2]  = ol[:length]
+        out[1::2]  = or_[:length]
         yield out.tobytes()
+
+    proc.wait()
 
 
 # ---------------------------------------------------------------------------
@@ -162,37 +161,37 @@ def play_background(source: str, az: float, el: float):
         import sounddevice as sd
         import queue as _queue
 
-        is_remote = source.startswith('http') or not os.path.exists(source)
-        if is_remote:
-            raise RuntimeError('play só funciona com arquivos locais do tablet')
+        if not os.path.exists(source):
+            raise RuntimeError(f'arquivo não encontrado: {source}')
 
         emit_status({'status': 'loading'})
         with open(source, 'rb') as f:
             file_bytes = f.read()
-        in_l, in_r = load_audio(file_bytes)
 
-        engine = build_engine(az, el)
+        engine    = build_engine(az, el)
         buf_q: _queue.Queue = _queue.Queue(maxsize=8)
         remainder = np.zeros((0, 2), dtype=np.float32)
 
         def producer():
-            for chunk_bytes in stream_generator(in_l, in_r, engine):
+            for chunk_bytes in stream_generator_from_bytes(file_bytes, engine):
                 samples = np.frombuffer(chunk_bytes, dtype=np.float32)
-                stereo = samples.reshape(-1, 2)
-                buf_q.put(stereo)
+                buf_q.put(samples.reshape(-1, 2))
             buf_q.put(None)
 
         threading.Thread(target=producer, daemon=True).start()
 
         def callback(outdata, frames, time_info, status):
             nonlocal remainder
-            out = np.zeros((frames, 2), dtype=np.float32)
-            pos, needed = 0, frames
+            out    = np.zeros((frames, 2), dtype=np.float32)
+            pos    = 0
+            needed = frames
+
             if len(remainder):
                 take = min(len(remainder), needed)
                 out[pos:pos+take] = remainder[:take]
                 remainder = remainder[take:]
                 pos += take; needed -= take
+
             while needed > 0:
                 try:
                     chunk = buf_q.get_nowait()
@@ -205,17 +204,16 @@ def play_background(source: str, az: float, el: float):
                 if take < len(chunk):
                     remainder = chunk[take:]
                 pos += take; needed -= take
+
             outdata[:] = out
 
         emit_status({'status': 'playing'})
         with sd.OutputStream(samplerate=TARGET_SR, channels=2,
                               dtype='float32', blocksize=BLOCK,
                               callback=callback):
-            while buf_q.qsize() > 0 or (
-                _playback_thread and _playback_thread.is_alive()
-            ):
+            while buf_q.qsize() > 0:
                 time.sleep(0.05)
-            time.sleep(0.3)
+            time.sleep(0.5)
 
         emit_status({'status': 'done'})
     except Exception as e:
@@ -284,69 +282,48 @@ class Handler(BaseHTTPRequestHandler):
 
     # -----------------------------------------------------------------------
     def do_POST(self):
-        path = urlparse(self.path).path
+        path   = urlparse(self.path).path
         length = int(self.headers.get('Content-Length', 0))
-        body = self.rfile.read(length)
-        ct = self.headers.get('Content-Type', '')
+        body   = self.rfile.read(length)
+        ct     = self.headers.get('Content-Type', '')
 
         # --- /stream: chunked f32le de volta pro cliente ---
         if path == '/stream':
             try:
-                parts = parse_multipart(ct, body)
+                parts      = parse_multipart(ct, body)
                 file_bytes = parts.get(b'file') or parts.get('file')
                 az = float((parts.get(b'az') or parts.get('az', b'0')).decode())
                 el = float((parts.get(b'el') or parts.get('el', b'0')).decode())
+                engine     = build_engine(az, el)
             except Exception as e:
-                self._send_json(400, {'error': f'parse error: {e}'})
-                return
-
-            try:
-                in_l, in_r = load_audio(file_bytes)
-                engine = build_engine(az, el)
-            except Exception as e:
-                self._send_json(500, {'error': str(e)})
+                self._send_json(400, {'error': str(e)})
                 return
 
             self.send_response(200)
             self.send_header('Content-Type', 'audio/x-raw-f32le')
             self.send_header('X-Sample-Rate', str(TARGET_SR))
             self.send_header('X-Channels', '2')
-            self.send_header('Transfer-Encoding', 'chunked')
             self.send_header('Access-Control-Allow-Origin', '*')
             self.end_headers()
 
             try:
-                for chunk_bytes in stream_generator(in_l, in_r, engine):
-                    # formato chunked HTTP: tamanho em hex + CRLF + dados + CRLF
-                    size_line = f'{len(chunk_bytes):X}\r\n'.encode()
-                    self.wfile.write(size_line)
+                for chunk_bytes in stream_generator_from_bytes(file_bytes, engine):
                     self.wfile.write(chunk_bytes)
-                    self.wfile.write(b'\r\n')
                     self.wfile.flush()
-                # chunk final de tamanho 0 = fim do stream
-                self.wfile.write(b'0\r\n\r\n')
-                self.wfile.flush()
             except (BrokenPipeError, ConnectionResetError):
-                pass  # cliente desconectou antes do fim — normal
+                pass
 
         # --- /process: WAV completo ---
         elif path == '/process':
             try:
-                parts = parse_multipart(ct, body)
+                parts      = parse_multipart(ct, body)
                 file_bytes = parts.get(b'file') or parts.get('file')
                 az = float((parts.get(b'az') or parts.get('az', b'0')).decode())
                 el = float((parts.get(b'el') or parts.get('el', b'0')).decode())
-            except Exception as e:
-                self._send_json(400, {'error': f'parse error: {e}'})
-                return
-
-            try:
-                in_l, in_r = load_audio(file_bytes)
-                engine = build_engine(az, el)
-                chunks = list(stream_generator(in_l, in_r, engine))
-                raw = np.frombuffer(b''.join(chunks), dtype=np.float32)
-                stereo = raw.reshape(-1, 2)
-                self._send_wav(stereo)
+                engine     = build_engine(az, el)
+                chunks     = list(stream_generator_from_bytes(file_bytes, engine))
+                raw        = np.frombuffer(b''.join(chunks), dtype=np.float32)
+                self._send_wav(raw.reshape(-1, 2))
             except Exception as e:
                 self._send_json(500, {'error': str(e)})
 
@@ -359,8 +336,8 @@ class Handler(BaseHTTPRequestHandler):
                 return
 
             source = params.get('source', '')
-            az = float(params.get('az', 0.0))
-            el = float(params.get('el', 0.0))
+            az     = float(params.get('az', 0.0))
+            el     = float(params.get('el', 0.0))
 
             if not source:
                 self._send_json(400, {'error': 'source obrigatório'})
@@ -397,7 +374,6 @@ def main():
 
     os.makedirs(CACHE_DIR, exist_ok=True)
 
-    # descobre IP local pra facilitar
     import socket
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -409,14 +385,9 @@ def main():
 
     print(f'[server] OpenMind rodando em http://{ip}:{args.port}')
     print()
-    print(f'  # streaming (celular → tablet → celular):')
     print(f'  curl -s -X POST http://{ip}:{args.port}/stream \\')
-    print(f'    -F "file=@musica.mp3" -F "az=0" -F "el=0" \\')
-    print(f'    | ffplay -nodisp -f f32le -ar {TARGET_SR} -ac 2 -')
-    print()
-    print(f'  # download WAV processado:')
-    print(f'  curl -X POST http://{ip}:{args.port}/process \\')
-    print(f'    -F "file=@musica.mp3" -F "az=0" -F "el=0" -o saida.wav')
+    print(f'    -F "file=@musica.opus" -F "az=30" -F "el=0" \\')
+    print(f'    | ffplay -nodisp -f f32le -ar {TARGET_SR} -ch_layout stereo -')
 
     server = HTTPServer((args.host, args.port), Handler)
     try:
@@ -427,3 +398,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+  
