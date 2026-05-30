@@ -117,42 +117,48 @@ def stream_generator_from_bytes(file_bytes: bytes, engine: ConvolutionEngine):
     def _feed():
         try:
             proc.stdin.write(file_bytes)
+        except BrokenPipeError:
+            pass
         finally:
-            proc.stdin.close()
+            try:
+                proc.stdin.close()
+            except BrokenPipeError:
+                pass
 
     threading.Thread(target=_feed, daemon=True).start()
 
     remainder = b''
-    while True:
-        chunk = proc.stdout.read(READ_BYTES)
-        if not chunk:
-            break
+    try:
+        while True:
+            chunk = proc.stdout.read(READ_BYTES)
+            if not chunk:
+                break
 
-        chunk = remainder + chunk
-        remainder = b''
+            chunk = remainder + chunk
+            remainder = b''
 
-        # descarta bytes que não formam um frame completo
-        usable = (len(chunk) // BYTES_PER_FRAME) * BYTES_PER_FRAME
-        if usable == 0:
-            remainder = chunk
-            continue
-        if usable < len(chunk):
-            remainder = chunk[usable:]
-            chunk    = chunk[:usable]
+            usable = (len(chunk) // BYTES_PER_FRAME) * BYTES_PER_FRAME
+            if usable == 0:
+                remainder = chunk
+                continue
+            if usable < len(chunk):
+                remainder = chunk[usable:]
+                chunk    = chunk[:usable]
 
-        samples = np.frombuffer(chunk, dtype=np.float32)
-        in_l    = samples[0::2]
-        in_r    = samples[1::2]
+            samples = np.frombuffer(chunk, dtype=np.float32)
+            in_l    = samples[0::2]
+            in_r    = samples[1::2]
 
-        ol, or_ = engine.process(in_l, in_r)
-        length  = min(len(ol), len(or_))
+            ol, or_ = engine.process(in_l, in_r)
+            length  = min(len(ol), len(or_))
 
-        out        = np.empty(length * 2, dtype=np.float32)
-        out[0::2]  = ol[:length]
-        out[1::2]  = or_[:length]
-        yield out.tobytes()
-
-    proc.wait()
+            out        = np.empty(length * 2, dtype=np.float32)
+            out[0::2]  = ol[:length]
+            out[1::2]  = or_[:length]
+            yield out.tobytes()
+    finally:
+        proc.stdout.close()
+        proc.wait(timeout=3)
 
 
 # ---------------------------------------------------------------------------
