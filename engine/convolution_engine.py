@@ -1,117 +1,121 @@
+"""
+True-Stereo Convolution Engine
+================================
+4 IRs: LL, LR, RL, RR
+  out_L = conv(in_L, ir_LL) + conv(in_R, ir_RL)
+  out_R = conv(in_L, ir_LR) + conv(in_R, ir_RR)
+
+Otimizações vs versão anterior:
+  - FFT das IRs cacheada por fft_size (não recalcula a cada bloco)
+  - Sem BandRouter — pipeline direto, sem múltiplos mix stages
+  - reset() limpa overlaps sem recriar arrays
+"""
+
 import numpy as np
-from engine.band_router import BandRouter
+from typing import Optional
 
 
 class ConvolutionEngine:
-    """
-    Pipeline:
-      input L/R
-        → BandRouter (divide por banda, roteia por posição HRTF)
-        → convolução por canal virtual
-        → mix binaural aditivo (direct domina, virtuais somam em cima)
-    """
-
-    def __init__(self, ir_front_l, ir_front_r,
-                       ir_rear_l,  ir_rear_r,
-                       ir_side_ll, ir_side_lr,
-                       ir_side_rl, ir_side_rr,
-                       sample_rate: int = 44100):
-        self.irs = {
-            'front_l':  ir_front_l,
-            'front_r':  ir_front_r,
-            'rear_l':   ir_rear_l,
-            'rear_r':   ir_rear_r,
-            'side_ll':  ir_side_ll,
-            'side_lr':  ir_side_lr,
-            'side_rl':  ir_side_rl,
-            'side_rr':  ir_side_rr,
+    def __init__(
+        self,
+        ir_ll: np.ndarray,  # L → out_L
+        ir_lr: np.ndarray,  # L → out_R  (crossfeed)
+        ir_rl: np.ndarray,  # R → out_L  (crossfeed)
+        ir_rr: np.ndarray,  # R → out_R
+        sample_rate: int = 44100,
+    ):
+        self.sample_rate = sample_rate
+        self._irs = {
+            'll': ir_ll.astype(np.float32),
+            'lr': ir_lr.astype(np.float32),
+            'rl': ir_rl.astype(np.float32),
+            'rr': ir_rr.astype(np.float32),
         }
-        self.router = BandRouter(sample_rate)
-        self._init_overlaps()
-        self._ir_ffts = self._precompute_ir_ffts()
+        self._ir_len = max(len(ir) for ir in self._irs.values())
 
-    def _init_overlaps(self):
-        self._overlaps = {
-            k: np.zeros(len(ir) - 1, dtype=np.float32)
-            for k, ir in self.irs.items()
-        }
+        # overlap buffers: tamanho fixo = ir_len - 1
+        self._ov: dict[str, np.ndarray] = {}
+        self.reset()
 
-    def _precompute_ir_ffts(self) -> dict:
-        """
-        Pré-computa FFT de todas as IRs — evita recalcular a cada bloco.
-        Cada entrada guarda (ir_fft, fft_size, ir_len).
-        """
-        cache = {}
-        for k, ir in self.irs.items():
-            ir_len = len(ir)
-            # fft_size será ajustado por bloco, mas guardamos a IR no domínio do tempo
-            # O rfft da IR é feito no _overlap_add com o fft_size correto
-            cache[k] = ir  # mantém referência; rfft cacheado por tamanho abaixo
-        return cache
+        # cache: fft_size → {key: ir_fft}
+        # evita rfft(ir) a cada bloco
+        self._fft_cache: dict[int, dict[str, np.ndarray]] = {}
 
+    # ------------------------------------------------------------------
     def reset(self):
-        self._init_overlaps()
+        """Zera os buffers de overlap (use ao iniciar nova faixa)."""
+        ov_len = self._ir_len - 1
+        self._ov = {k: np.zeros(ov_len, dtype=np.float32) for k in self._irs}
 
-    def _overlap_add(self, signal: np.ndarray,
-                     ir: np.ndarray,
-                     overlap: np.ndarray) -> np.ndarray:
-        ir_len = len(ir)
+    # ------------------------------------------------------------------
+    def _get_ir_ffts(self, fft_size: int) -> dict[str, np.ndarray]:
+        if fft_size not in self._fft_cache:
+            self._fft_cache[fft_size] = {
+                k: np.fft.rfft(ir, n=fft_size)
+                for k, ir in self._irs.items()
+            }
+        return self._fft_cache[fft_size]
+
+    # ------------------------------------------------------------------
+    def _convolve_block(
+        self,
+        signal: np.ndarray,
+        ir_key: str,
+        fft_size: int,
+        ir_ffts: dict,
+    ) -> np.ndarray:
+        """
+        Overlap-add de um bloco.
+        Retorna exatamente len(signal) amostras.
+        """
+        sig_len = len(signal)
+        ir_len  = len(self._irs[ir_key])
+
+        sig_fft = np.fft.rfft(signal, n=fft_size)
+        conv    = np.fft.irfft(sig_fft * ir_ffts[ir_key], n=fft_size)
+        conv    = conv[:sig_len + ir_len - 1].astype(np.float32)
+
+        ov_len = len(self._ov[ir_key])
+        conv[:ov_len] += self._ov[ir_key]
+        # salva tail para o próximo bloco
+        tail_start = sig_len
+        tail_end   = tail_start + ov_len
+        self._ov[ir_key][:] = conv[tail_start:tail_end]
+
+        return conv[:sig_len]
+
+    # ------------------------------------------------------------------
+    def process(
+        self,
+        in_l: np.ndarray,
+        in_r: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Processa um bloco stereo.
+        Retorna (out_l, out_r) com o mesmo comprimento da entrada.
+        """
+        n = len(in_l)
+        # fft_size = próxima potência de 2 >= n + ir_len - 1
         fft_size = 1
-        while fft_size < len(signal) + ir_len - 1:
+        while fft_size < n + self._ir_len - 1:
             fft_size <<= 1
 
-        ir_fft    = np.fft.rfft(ir, n=fft_size)
-        block_fft = np.fft.rfft(signal, n=fft_size)
-        conv = np.fft.irfft(block_fft * ir_fft, n=fft_size)
-        conv = conv[:len(signal) + ir_len - 1].astype(np.float32)
+        ir_ffts = self._get_ir_ffts(fft_size)
 
-        ov_len = len(overlap)
-        conv[:ov_len] += overlap
-        overlap[:] = conv[len(signal):len(signal) + ov_len]
+        # True-Stereo: 4 convoluções
+        ll = self._convolve_block(in_l, 'll', fft_size, ir_ffts)
+        lr = self._convolve_block(in_l, 'lr', fft_size, ir_ffts)
+        rl = self._convolve_block(in_r, 'rl', fft_size, ir_ffts)
+        rr = self._convolve_block(in_r, 'rr', fft_size, ir_ffts)
 
-        return conv[:len(signal)]
+        out_l = ll + rl  # L direto + crossfeed de R
+        out_r = rr + lr  # R direto + crossfeed de L
 
-    def process(self, input_l: np.ndarray,
-                      input_r: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-
-        ch = self.router.process(input_l, input_r)
-
-        # Direto (âncora) — convoluído com IR frontal
-        direct_l = self._overlap_add(ch['direct_l'], self.irs['front_l'], self._overlaps['front_l'])
-        direct_r = self._overlap_add(ch['direct_r'], self.irs['front_r'], self._overlaps['front_r'])
-
-        # Front virtual (bandas sub + médio-baixo + ar leve)
-        front_l  = self._overlap_add(ch['front_l'],  self.irs['front_l'], self._overlaps['front_l'])
-        front_r  = self._overlap_add(ch['front_r'],  self.irs['front_r'], self._overlaps['front_r'])
-
-        # Rear (médio-alto + presença com coloração traseira)
-        rear_l   = self._overlap_add(ch['rear_l'],   self.irs['rear_l'],  self._overlaps['rear_l'])
-        rear_r   = self._overlap_add(ch['rear_r'],   self.irs['rear_r'],  self._overlaps['rear_r'])
-
-        # Sides (médio-alto + presença + ar)
-        side_ll  = self._overlap_add(ch['side_l'],   self.irs['side_ll'], self._overlaps['side_ll'])
-        side_lr  = self._overlap_add(ch['side_l'],   self.irs['side_lr'], self._overlaps['side_lr'])
-        side_rl  = self._overlap_add(ch['side_r'],   self.irs['side_rl'], self._overlaps['side_rl'])
-        side_rr  = self._overlap_add(ch['side_r'],   self.irs['side_rr'], self._overlaps['side_rr'])
-
-        # Mix binaural aditivo:
-        # direct domina → imagem original preservada
-        # virtuais somam em cima → espacialização adicional
-        out_l = (
-            direct_l * 0.80 +   # âncora L
-            front_l  * 0.20 +   # coloração frontal virtual
-            side_ll  * 0.25 +   # lado esquerdo direto
-            side_rl  * 0.08 +   # crossfeed direito→esquerdo
-            rear_l   * 0.12     # traseiro esquerdo
-        )
-
-        out_r = (
-            direct_r * 0.80 +   # âncora R
-            front_r  * 0.20 +   # coloração frontal virtual
-            side_rr  * 0.25 +   # lado direito direto
-            side_lr  * 0.08 +   # crossfeed esquerdo→direito
-            rear_r   * 0.12     # traseiro direito
-        )
+        # normalização suave para evitar clip
+        peak = max(np.max(np.abs(out_l)), np.max(np.abs(out_r)), 1e-9)
+        if peak > 0.99:
+            out_l /= peak
+            out_r /= peak
 
         return out_l.astype(np.float32), out_r.astype(np.float32)
-                          
+        
