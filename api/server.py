@@ -62,7 +62,7 @@ def build_engine(az, el):
     _, _, lr = loader.load(_nearest_ir(az_r))  # L → out_R (crossfeed com IR do lado R)
     _, rl, _ = loader.load(_nearest_ir(az))    # R → out_L (crossfeed com IR do lado L)
 
-    return ConvolutionEngine(ir_ll=ll, ir_lr=lr*0.08, ir_rl=rl*0.08, ir_rr=rr)
+    return ConvolutionEngine(ir_ll=ll, ir_lr=lr*0.05, ir_rl=rl*0.05, ir_rr=rr)
 
 
 # ---------------------------------------------------------------------------
