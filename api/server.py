@@ -51,11 +51,18 @@ def _nearest_ir(az):
 
 def build_engine(az, el):
     loader = IrLoader(HRTF_DIR)
-    _, ll, _  = loader.load(_nearest_ir(az))
-    _, __, lr = loader.load("azi_0,0_ele_0,0.wav")
-    _, rl, _  = loader.load("azi_0,0_ele_0,0.wav")
-    _, __, rr = loader.load(_nearest_ir((360.0 - az) % 360.0))
-    return ConvolutionEngine(ir_ll=ll, ir_lr=lr*0.25, ir_rl=rl*0.25, ir_rr=rr)
+    az_r = (360.0 - az) % 360.0
+
+    # direto: cada canal usa a IR do seu lado
+    _, ll, _ = loader.load(_nearest_ir(az))    # L → out_L
+    _, _, rr = loader.load(_nearest_ir(az_r))  # R → out_R
+
+    # crossfeed: usa IR do lado oposto — mantém lateralização
+    # sem puxar pra frente como a IR frontal fazia
+    _, _, lr = loader.load(_nearest_ir(az_r))  # L → out_R (crossfeed com IR do lado R)
+    _, rl, _ = loader.load(_nearest_ir(az))    # R → out_L (crossfeed com IR do lado L)
+
+    return ConvolutionEngine(ir_ll=ll, ir_lr=lr*0.15, ir_rl=rl*0.15, ir_rr=rr)
 
 
 # ---------------------------------------------------------------------------
@@ -315,4 +322,4 @@ def main():
 
 if __name__ == '__main__':
     main()
-              
+          
