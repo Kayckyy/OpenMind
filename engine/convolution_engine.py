@@ -118,4 +118,4 @@ class ConvolutionEngine:
             out_r /= peak
 
         return out_l.astype(np.float32), out_r.astype(np.float32)
-        
+      
