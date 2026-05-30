@@ -289,13 +289,13 @@ class Handler(BaseHTTPRequestHandler):
 # ---------------------------------------------------------------------------
 
 def main():
+    global MUSIC_DIR
     parser = argparse.ArgumentParser()
     parser.add_argument('--port', type=int, default=8765)
     parser.add_argument('--host', default='0.0.0.0')
     parser.add_argument('--music-dir', default=MUSIC_DIR)
     args = parser.parse_args()
 
-    global MUSIC_DIR
     MUSIC_DIR = os.path.expanduser(args.music_dir)
     os.makedirs(MUSIC_DIR, exist_ok=True)
 
@@ -314,4 +314,4 @@ def main():
 
 if __name__ == '__main__':
     main()
-          
+  
