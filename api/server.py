@@ -38,7 +38,8 @@ HRTF_DIR  = os.path.join(_ROOT, 'hrtf', 'sadie')
 TARGET_SR = 44100
 BLOCK     = 2048
 CACHE_DIR = os.path.join(_ROOT, 'cache')
-FFMPEG    = '/data/data/com.termux/files/usr/bin/ffmpeg'
+import shutil as _shutil
+FFMPEG = _shutil.which('ffmpeg') or '/data/data/com.termux/files/usr/bin/ffmpeg'
 
 _status_listeners: list = []
 _status_lock = threading.Lock()
@@ -398,4 +399,4 @@ def main():
 
 if __name__ == '__main__':
     main()
-  
+          
