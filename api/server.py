@@ -153,8 +153,13 @@ def stream_generator_from_bytes(file_bytes: bytes, engine: ConvolutionEngine):
     remainder = b''
     try:
         while True:
+            # lê com timeout implícito — se o processo morreu e stdout fechou,
+            # read() retorna b'' imediatamente
             chunk = proc.stdout.read(READ_BYTES)
             if not chunk:
+                # confirma que o ffmpeg realmente encerrou
+                proc.stdout.close()
+                proc.wait(timeout=2)
                 break
 
             chunk = remainder + chunk
@@ -179,9 +184,18 @@ def stream_generator_from_bytes(file_bytes: bytes, engine: ConvolutionEngine):
             out[0::2]  = ol[:length]
             out[1::2]  = or_[:length]
             yield out.tobytes()
+    except Exception:
+        pass
     finally:
-        proc.stdout.close()
-        proc.wait(timeout=3)
+        try:
+            proc.stdout.close()
+        except Exception:
+            pass
+        try:
+            proc.kill()
+            proc.wait(timeout=2)
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -428,4 +442,4 @@ def main():
 
 if __name__ == '__main__':
     main()
-                  
+          
