@@ -137,13 +137,18 @@ def load_audio(file_bytes: bytes) -> tuple[np.ndarray, np.ndarray]:
 
 # ---------------------------------------------------------------------------
 def stream_generator(in_l, in_r, engine):
-    """Gera chunks f32le interleaved processados bloco a bloco."""
     for i in range(0, len(in_l), BLOCK):
         bl = in_l[i:i + BLOCK]
         br = in_r[i:i + BLOCK]
         ol, or_ = engine.process(bl, br)
         length = min(len(ol), len(or_))
-        # interleave: L R L R L R ...
+        
+        # garante múltiplo de 2 (frames stereo completos)
+        if length % 2 != 0:
+            length -= 1
+        if length < 2:
+            continue
+            
         out = np.empty(length * 2, dtype=np.float32)
         out[0::2] = ol[:length]
         out[1::2] = or_[:length]
